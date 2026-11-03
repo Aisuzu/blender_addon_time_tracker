@@ -74,6 +74,11 @@ def format_time(seconds):
     seconds = int(seconds % 60)
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
+def _start_modal_operator():
+    if bpy.context.window is not None:
+        bpy.ops.view3d.time_tracker_modal('INVOKE_DEFAULT')
+    return None
+
 # --- UI: Panel in der Seitenleiste ---
 class TIME_TRACKER_PT_panel(bpy.types.Panel):
     bl_label = "Projekt Timer"
@@ -129,7 +134,7 @@ def register():
     # Timer registrieren (läuft alle 1 Sekunde)
     bpy.app.timers.register(check_activity, persistent=True)
     
-    bpy.ops.view3d.time_tracker_modal('INVOKE_DEFAULT')
+    bpy.app.timers.register(_start_modal_operator, first_interval=0.1, persistent=True)
 
 def unregister():
     # Timer deregistrieren
@@ -137,10 +142,12 @@ def unregister():
         bpy.app.timers.unregister(check_activity)
 
     # Handler deregistrieren
-    if _update_activity in bpy.app.handlers.depsgraph_update_post:
+    if depsgraph_update_handler in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.remove(depsgraph_update_handler)
     
-    _timer_state["modal_handler"] = None
+    if _timer_state.get("modal_handler"):
+        _timer_state["modal_handler"] = None
+
 
     # Klassen deregistrieren
     for cls in reversed(classes):
