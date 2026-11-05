@@ -11,28 +11,29 @@ bl_info = {
 
 import bpy
 import time
+from bpy.app.handlers import persistent
 
-# --- PropertyGroup für Timer-Daten (wird in der .blend-Datei gespeichert) ---
+# --- PropertyGroup for timer data (is saved inside the .blend) ---
 class ProjectTimerProperties(bpy.types.PropertyGroup):
     total_seconds: bpy.props.IntProperty(
-        name="Gesamtzeit (Sekunden)",
+        name="Total time (seconds)",
         default=0
     )
 
 _timer_state = {
-    "last_activity": time.time(),  # Wird nicht gespeichert, aber immer aktuell
+    "last_activity": time.time(),
     "is_active": False,
     "start_time": 0.0,
     "modal_handler": None,
     "min_activity_interval": 1.0
 }
 
-# --- Timer-Daten abrufen ---
+# --- get timer data inside scene ---
 def get_timer_data():
     scene = bpy.context.scene
     return scene.project_timer
 
-# --- Timer-Logik (wird alle 1 Sekunde aufgerufen) ---
+# --- "logic" for the timer, is called every 1 second ---
 def check_activity():
     timer = get_timer_data()
     current_time = time.time()
@@ -51,23 +52,28 @@ def check_activity():
             if area.type == 'VIEW_3D':
                 area.tag_redraw()
 
-    return 1.0  # Timer alle 1 Sekunde ausführen
+    return 1.0
 
-# --- depsgraph-Handler für Szenenänderungen ---
+# --- depsgraph-Handler for changes ---
+@persistent
 def depsgraph_update_handler(scene):
     if (time.time() - _timer_state["last_activity"]) > _timer_state["min_activity_interval"]:
         _update_activity()
+        
+@persistent
+def _restart_on_load(dummy):
+    if bpy.context.window is not None:
+        bpy.ops.view3d.time_tracker_modal('INVOKE_DEFAULT')
 
-# --- Aktivität aktualisieren ---
+# --- update the activity and UI ---
 def _update_activity():
     _timer_state["last_activity"] = time.time()
-    # Erzwinge UI-Update
     for window in bpy.context.window_manager.windows:
         for area in window.screen.areas:
             if area.type == 'VIEW_3D':
                 area.tag_redraw()
 
-# --- Zeit formatieren (HH:MM:SS) ---
+# --- time format for UI (HH:MM:SS) ---
 def format_time(seconds):
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
@@ -75,11 +81,12 @@ def format_time(seconds):
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 def _start_modal_operator():
-    if bpy.context.window is not None:
-        bpy.ops.view3d.time_tracker_modal('INVOKE_DEFAULT')
+    if not _timer_state.get("modal_handler"):
+        if bpy.context.window is not None:
+            bpy.ops.view3d.time_tracker_modal('INVOKE_DEFAULT')
     return None
 
-# --- UI: Panel in der Seitenleiste ---
+# --- UI: Panel ---
 class TIME_TRACKER_PT_panel(bpy.types.Panel):
     bl_label = "Projekt Timer"
     bl_idname = "TIME_TRACKER_PT_panel"
@@ -97,7 +104,6 @@ class TIME_TRACKER_OT_modal(bpy.types.Operator):
     bl_label = "Time Tracker Modal"
 
     def modal(self, context, event):
-        # Nur bei PRESS-Events und wenn genug Zeit vergangen ist
         if event.value in {'PRESS', 'RELEASE'} and (time.time() - _timer_state["last_activity"]) > _timer_state["min_activity_interval"]:
             if event.type in {
                 'LEFTMOUSE', 'RIGHTMOUSE', 'MIDDLEMOUSE',
@@ -106,14 +112,14 @@ class TIME_TRACKER_OT_modal(bpy.types.Operator):
             }:
                 _update_activity()
 
-        return {'PASS_THROUGH'}  # Events an Blender weitergeben
+        return {'PASS_THROUGH'}
 
     def invoke(self, context, event):
         _timer_state["modal_handler"] = context.window_manager.modal_handler_add(self)
         _update_activity()
         return {'RUNNING_MODAL'}
 
-# --- Add-on Registrierung ---
+# --- Add-on registration---
 classes = (
     ProjectTimerProperties,
     TIME_TRACKER_PT_panel,
@@ -121,35 +127,29 @@ classes = (
 )
 
 def register():
-    # Klassen registrieren
     for cls in classes:
         bpy.utils.register_class(cls)
 
-    # PropertyGroup an Szene anhängen
     bpy.types.Scene.project_timer = bpy.props.PointerProperty(type=ProjectTimerProperties)
 
-    # Handler registrieren
     bpy.app.handlers.depsgraph_update_post.append(depsgraph_update_handler)
+    bpy.app.handlers.load_post.append(_restart_on_load)
 
-    # Timer registrieren (läuft alle 1 Sekunde)
     bpy.app.timers.register(check_activity, persistent=True)
-    
     bpy.app.timers.register(_start_modal_operator, first_interval=0.1, persistent=True)
 
 def unregister():
-    # Timer deregistrieren
     if check_activity in bpy.app.timers.timers():
         bpy.app.timers.unregister(check_activity)
 
-    # Handler deregistrieren
     if depsgraph_update_handler in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.remove(depsgraph_update_handler)
+    if _restart_on_load in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_restart_on_load)
     
     if _timer_state.get("modal_handler"):
         _timer_state["modal_handler"] = None
 
-
-    # Klassen deregistrieren
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
     del bpy.types.Scene.project_timer
