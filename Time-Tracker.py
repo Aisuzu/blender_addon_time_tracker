@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Projekt Time Tracker",
     "author": "VT",
-    "version": (1, 5),
+    "version": (1, 6),
     "blender": (5, 2, 3),
     "location": "View3D > Sidebar > Timer",
     "description": "Tracking your actual working time on the project. The timer stops when nothing is done on the scene.",
