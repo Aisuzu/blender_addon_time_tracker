@@ -25,17 +25,32 @@ _timer_state = {
     "is_active": False,
     "start_time": 0.0,
     "modal_handler": None,
-    "min_activity_interval": 1.0
+    "min_activity_interval": 1.0,
+    # Used to detect switching to a different scene in the current file.
+    "scene_pointer": None,
 }
 
 # --- get timer data inside scene ---
 def get_timer_data():
     scene = bpy.context.scene
-    return scene.project_timer
+    return scene.project_timer if scene is not None else None
 
 # --- "logic" for the timer, is called every 1 second ---
 def check_activity():
-    timer = get_timer_data()
+    scene = bpy.context.scene
+    if scene is None:
+        return 1.0
+
+    timer = scene.project_timer
+    scene_pointer = scene.as_pointer()
+
+    # Start a fresh timer when the active scene changes.
+    if _timer_state["scene_pointer"] != scene_pointer:
+        timer.total_seconds = 0
+        _timer_state["scene_pointer"] = scene_pointer
+        _timer_state["last_activity"] = time.time()
+        _timer_state["is_active"] = False
+
     current_time = time.time()
 
     if current_time - _timer_state["last_activity"] < _timer_state["min_activity_interval"]:
@@ -46,11 +61,14 @@ def check_activity():
     else:
         if _timer_state["is_active"]:
             _timer_state["is_active"] = False
-            
-    for window in bpy.context.window_manager.windows:
-        for area in window.screen.areas:
-            if area.type == 'VIEW_3D':
-                area.tag_redraw()
+
+    wm = bpy.context.window_manager
+    if wm is not None:
+        for window in wm.windows:
+            if window.screen is not None:
+                for area in window.screen.areas:
+                    if area.type == 'VIEW_3D':
+                        area.tag_redraw()
 
     return 1.0
 
@@ -59,19 +77,33 @@ def check_activity():
 def depsgraph_update_handler(scene):
     if (time.time() - _timer_state["last_activity"]) > _timer_state["min_activity_interval"]:
         _update_activity()
-        
+
 @persistent
 def _restart_on_load(dummy):
+    # A loaded .blend may contain previously saved timer values. Always clear
+    # the active scene's value so every newly opened file starts from zero.
+    scene = bpy.context.scene
+    if scene is not None:
+        scene.project_timer.total_seconds = 0
+        _timer_state["scene_pointer"] = scene.as_pointer()
+
+    _timer_state["last_activity"] = time.time()
+    _timer_state["is_active"] = False
+    _timer_state["modal_handler"] = None
+
     if bpy.context.window is not None:
         bpy.ops.view3d.time_tracker_modal('INVOKE_DEFAULT')
 
 # --- update the activity and UI ---
 def _update_activity():
     _timer_state["last_activity"] = time.time()
-    for window in bpy.context.window_manager.windows:
-        for area in window.screen.areas:
-            if area.type == 'VIEW_3D':
-                area.tag_redraw()
+    wm = bpy.context.window_manager
+    if wm is not None:
+        for window in wm.windows:
+            if window.screen is not None:
+                for area in window.screen.areas:
+                    if area.type == 'VIEW_3D':
+                        area.tag_redraw()
 
 # --- time format for UI (HH:MM:SS) ---
 def format_time(seconds):
@@ -97,7 +129,8 @@ class TIME_TRACKER_PT_panel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         timer = get_timer_data()
-        layout.label(text=f"Project Lifetime: {format_time(timer.total_seconds)}")
+        if timer is not None:
+            layout.label(text=f"Project Lifetime: {format_time(timer.total_seconds)}")
 
 class TIME_TRACKER_OT_modal(bpy.types.Operator):
     bl_idname = "view3d.time_tracker_modal"
@@ -132,6 +165,9 @@ def register():
 
     bpy.types.Scene.project_timer = bpy.props.PointerProperty(type=ProjectTimerProperties)
 
+    scene = bpy.context.scene
+    _timer_state["scene_pointer"] = scene.as_pointer() if scene is not None else None
+
     bpy.app.handlers.depsgraph_update_post.append(depsgraph_update_handler)
     bpy.app.handlers.load_post.append(_restart_on_load)
 
@@ -146,7 +182,7 @@ def unregister():
         bpy.app.handlers.depsgraph_update_post.remove(depsgraph_update_handler)
     if _restart_on_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_restart_on_load)
-    
+
     if _timer_state.get("modal_handler"):
         _timer_state["modal_handler"] = None
 
